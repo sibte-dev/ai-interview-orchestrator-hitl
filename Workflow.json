@@ -1,0 +1,209 @@
+{
+  "name": "AI Interview Orchestrator (HITL Demo)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "candidate-intake",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1a2b3c4d-0001-4000-8000-000000000001",
+      "name": "Webhook: Candidate Intake",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1120, 300]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "duplicateItem": false,
+        "assignments": {
+          "assignments": [
+            { "id": "n1", "name": "candidate_name", "value": "Jordan Ellis (synthetic)", "type": "string" },
+            { "id": "n2", "name": "role_applied", "value": "Backend Engineer, Fintech Client (synthetic)", "type": "string" },
+            { "id": "n3", "name": "resume_text", "value": "5 years Node.js, 2 years distributed systems, led a payments migration, no formal CS degree.", "type": "string" },
+            { "id": "n4", "name": "job_requirements", "value": "Node.js, distributed systems experience, payments/fintech exposure preferred, degree not required.", "type": "string" }
+          ]
+        }
+      },
+      "id": "1a2b3c4d-0002-4000-8000-000000000002",
+      "name": "Set: Synthetic Candidate Payload",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-880, 300],
+      "notes": "Demo data only. In production this is populated by the intake webhook / ATS payload."
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "claude-sonnet-4-6",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You score candidates on demonstrated skills and competencies, not job titles or degrees. Return strict JSON: {\"skills_score\": 0-100, \"rationale\": string, \"flags\": string[]}."
+            },
+            {
+              "role": "user",
+              "content": "=Resume: {{$json.resume_text}}\n\nRequirements: {{$json.job_requirements}}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.2 }
+      },
+      "id": "1a2b3c4d-0003-4000-8000-000000000003",
+      "name": "Agent A: Skills-Based Scorer (Claude)",
+      "type": "n8n-nodes-base.anthropic",
+      "typeVersion": 1,
+      "position": [-620, 300],
+      "notes": "Multi-model routing point: scoring is intentionally separated from question generation below so each task uses the model best suited to it."
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Generate 3 competency-based interview questions targeting the candidate's weakest flagged areas. Return strict JSON: {\"questions\": string[]}."
+            },
+            {
+              "role": "user",
+              "content": "=Scoring rationale: {{$json.rationale}}\nFlags: {{$json.flags}}"
+            }
+          ]
+        },
+        "options": { "temperature": 0.5 }
+      },
+      "id": "1a2b3c4d-0004-4000-8000-000000000004",
+      "name": "Agent B: Question Generator (GPT-4o-mini)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [-380, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{$json.skills_score}}",
+              "rightValue": 70,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "1a2b3c4d-0005-4000-8000-000000000005",
+      "name": "IF: Score >= 70",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-380, 420]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "recruiter-approval"
+        },
+        "message": "=Candidate {{$json.candidate_name}} scored {{$json.skills_score}}/100 for {{$json.role_applied}}. Approve to proceed to scheduling, or reject.",
+        "responseType": "customForm",
+        "formFields": {
+          "values": [
+            { "fieldLabel": "Decision", "fieldType": "dropdown", "fieldOptions": { "values": [{"option": "Approve"}, {"option": "Reject"}, {"option": "Request more info"}] } }
+          ]
+        }
+      },
+      "id": "1a2b3c4d-0006-4000-8000-000000000006",
+      "name": "HITL Gate: Recruiter Approval (Wait Node)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-140, 300],
+      "notes": "Core HITL checkpoint. Workflow pauses here — no auto-reject or auto-advance without human sign-off, per 2026 governance-first automation practice."
+    },
+    {
+      "parameters": {
+        "channel": "#recruiting-demo",
+        "text": "=Scheduling interview for {{$json.candidate_name}} — approved by recruiter."
+      },
+      "id": "1a2b3c4d-0007-4000-8000-000000000007",
+      "name": "Slack: Notify Scheduling Approved",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [120, 200]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "SYNTHETIC_SHEET_ID",
+        "sheetName": "outcomes_log",
+        "columns": {
+          "value": {
+            "candidate_name": "={{$json.candidate_name}}",
+            "skills_score": "={{$json.skills_score}}",
+            "recruiter_decision": "={{$json.Decision}}",
+            "timestamp": "={{$now}}"
+          }
+        }
+      },
+      "id": "1a2b3c4d-0008-4000-8000-000000000008",
+      "name": "Log Outcome (Self-Improving Feedback Loop)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [120, 420],
+      "notes": "Feeds recruiter override/accept data back for future prompt tuning of Agent A — this is the 'self-improving' loop referenced in the architecture."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: \"processed\", candidate: $json.candidate_name } }}"
+      },
+      "id": "1a2b3c4d-0009-4000-8000-000000000009",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [380, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Candidate Intake": {
+      "main": [[{ "node": "Set: Synthetic Candidate Payload", "type": "main", "index": 0 }]]
+    },
+    "Set: Synthetic Candidate Payload": {
+      "main": [[{ "node": "Agent A: Skills-Based Scorer (Claude)", "type": "main", "index": 0 }]]
+    },
+    "Agent A: Skills-Based Scorer (Claude)": {
+      "main": [[
+        { "node": "Agent B: Question Generator (GPT-4o-mini)", "type": "main", "index": 0 },
+        { "node": "IF: Score >= 70", "type": "main", "index": 0 }
+      ]]
+    },
+    "IF: Score >= 70": {
+      "main": [
+        [{ "node": "HITL Gate: Recruiter Approval (Wait Node)", "type": "main", "index": 0 }],
+        [{ "node": "Log Outcome (Self-Improving Feedback Loop)", "type": "main", "index": 0 }]
+      ]
+    },
+    "HITL Gate: Recruiter Approval (Wait Node)": {
+      "main": [[
+        { "node": "Slack: Notify Scheduling Approved", "type": "main", "index": 0 },
+        { "node": "Log Outcome (Self-Improving Feedback Loop)", "type": "main", "index": 0 }
+      ]]
+    },
+    "Slack: Notify Scheduling Approved": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    },
+    "Log Outcome (Self-Improving Feedback Loop)": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "demo-portfolio-instance"
+  }
+}
